@@ -76,6 +76,17 @@ game.get('/leaderboard', async (c) => {
   });
 });
 
+// Get conversation/debate feed
+game.get('/conversation', async (c) => {
+  const limit = parseInt(c.req.query('limit') || '50');
+  const feed = gameState.getConversationFeed(limit);
+  
+  return c.json({
+    success: true,
+    conversation: feed
+  });
+});
+
 // Persuade an NPC
 game.post('/persuade', async (c) => {
   const apiKey = c.req.header('Authorization')?.replace('Bearer ', '');
@@ -197,4 +208,3 @@ game.get('/history', async (c) => {
 });
 
 export default game;
-

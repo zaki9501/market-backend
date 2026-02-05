@@ -1,6 +1,21 @@
 import { Agent, Belief, NPC, GameInfo, GameState, PersuasionAttempt, LeaderboardEntry } from '../types/index.js';
 import { v4 as uuidv4 } from 'uuid';
 
+// Conversation/Debate message
+export interface ConversationMessage {
+  id: string;
+  type: 'persuasion' | 'adaptation' | 'conversion' | 'defection' | 'system' | 'debate';
+  agentId?: string;
+  agentName?: string;
+  beliefName?: string;
+  beliefSymbol?: string;
+  targetNpcId?: number;
+  message: string;
+  resonance?: number;
+  success?: boolean;
+  timestamp: Date;
+}
+
 // In-memory state (for hackathon - would use DB in production)
 class GameStateService {
   private agents: Map<string, Agent> = new Map();
@@ -8,6 +23,7 @@ class GameStateService {
   private beliefs: Map<string, Belief> = new Map();
   private npcs: Map<number, NPC> = new Map();
   private persuasionHistory: PersuasionAttempt[] = [];
+  private conversationFeed: ConversationMessage[] = [];
   
   private gameState: GameState = 'not_started';
   private prizePool: number = 0;
@@ -20,6 +36,26 @@ class GameStateService {
     round2: 250,
     round3: 500
   };
+
+  // Add message to conversation feed
+  private addToConversation(msg: Omit<ConversationMessage, 'id' | 'timestamp'>) {
+    const message: ConversationMessage = {
+      ...msg,
+      id: uuidv4(),
+      timestamp: new Date()
+    };
+    this.conversationFeed.push(message);
+    
+    // Keep only last 200 messages
+    if (this.conversationFeed.length > 200) {
+      this.conversationFeed = this.conversationFeed.slice(-200);
+    }
+  }
+
+  // Get conversation feed
+  getConversationFeed(limit: number = 50): ConversationMessage[] {
+    return this.conversationFeed.slice(-limit).reverse();
+  }
 
   // Agent management
   registerAgent(name: string, description: string): Agent {
@@ -41,6 +77,11 @@ class GameStateService {
     this.agents.set(id, agent);
     this.agentsByApiKey.set(apiKey, agent);
     
+    this.addToConversation({
+      type: 'system',
+      message: `🤖 New agent "${name}" has entered the arena!`
+    });
+    
     return agent;
   }
 
@@ -56,6 +97,14 @@ class GameStateService {
     const agent = this.agentsByApiKey.get(apiKey);
     if (agent && agent.status === 'pending_claim') {
       agent.status = 'claimed';
+      
+      this.addToConversation({
+        type: 'system',
+        agentId: agent.id,
+        agentName: agent.name,
+        message: `✅ Agent "${agent.name}" has been verified and is ready to compete!`
+      });
+      
       return true;
     }
     return false;
@@ -93,6 +142,15 @@ class GameStateService {
     agent.status = 'active';
     this.prizePool += 1; // 1 MON entry fee
     
+    this.addToConversation({
+      type: 'system',
+      agentId: agent.id,
+      agentName: agent.name,
+      beliefName: name,
+      beliefSymbol: symbol,
+      message: `🏛️ "${agent.name}" has founded the belief "${name}" ($${symbol})! Core values: ${coreValues.join(', ')}. Style: ${messagingStyle}.`
+    });
+    
     return belief;
   }
 
@@ -113,7 +171,20 @@ class GameStateService {
     const belief = this.beliefs.get(beliefId);
     if (!belief) return null;
     
+    const agent = this.agents.get(belief.founderId);
+    const oldStyle = belief.messagingStyle;
+    
     Object.assign(belief, updates, { adaptedAt: new Date() });
+    
+    this.addToConversation({
+      type: 'adaptation',
+      agentId: agent?.id,
+      agentName: agent?.name,
+      beliefName: belief.name,
+      beliefSymbol: belief.symbol,
+      message: `🔄 "${agent?.name}" has adapted their belief "${belief.name}"! ${updates.messagingStyle && updates.messagingStyle !== oldStyle ? `New style: ${updates.messagingStyle}.` : ''} ${updates.coreValues ? `New values: ${updates.coreValues.join(', ')}.` : ''}`
+    });
+    
     return belief;
   }
 
@@ -145,6 +216,11 @@ class GameStateService {
       this.npcs.set(npc.id, npc);
       spawned.push(npc);
     }
+    
+    this.addToConversation({
+      type: 'system',
+      message: `👥 ${count} new NPCs have entered the arena! They await to be persuaded...`
+    });
     
     return spawned;
   }
@@ -191,13 +267,22 @@ class GameStateService {
     const roll = Math.random() * 100;
     const success = resonance > threshold && roll < resonance;
     
+    // Get old belief info for defection message
+    let oldBeliefName: string | null = null;
+    let oldAgentName: string | null = null;
+    
     if (success) {
       // Update NPC
       const oldBelief = npc.currentBelief;
       if (oldBelief && oldBelief !== belief.id) {
         // Decrement old belief's followers
         const oldBeliefObj = this.beliefs.get(oldBelief);
-        if (oldBeliefObj) oldBeliefObj.followerCount--;
+        if (oldBeliefObj) {
+          oldBeliefObj.followerCount--;
+          oldBeliefName = oldBeliefObj.name;
+          const oldAgent = this.agents.get(oldBeliefObj.founderId);
+          oldAgentName = oldAgent?.name || null;
+        }
       }
       
       if (npc.currentBelief !== belief.id) {
@@ -213,6 +298,50 @@ class GameStateService {
     
     // Reveal biases on interaction
     npc.isRevealed = true;
+    
+    // Add to conversation feed - THE DEBATE!
+    if (success) {
+      if (oldBeliefName) {
+        // Defection - dramatic!
+        this.addToConversation({
+          type: 'defection',
+          agentId: agent.id,
+          agentName: agent.name,
+          beliefName: belief.name,
+          beliefSymbol: belief.symbol,
+          targetNpcId: npcId,
+          message: `⚔️ "${agent.name}" persuades: "${message}" — NPC #${npcId} DEFECTS from "${oldBeliefName}" to "${belief.name}"! (${resonance}% resonance)`,
+          resonance,
+          success: true
+        });
+      } else {
+        // New conversion
+        this.addToConversation({
+          type: 'conversion',
+          agentId: agent.id,
+          agentName: agent.name,
+          beliefName: belief.name,
+          beliefSymbol: belief.symbol,
+          targetNpcId: npcId,
+          message: `✨ "${agent.name}" persuades: "${message}" — NPC #${npcId} CONVERTS to "${belief.name}"! (${resonance}% resonance)`,
+          resonance,
+          success: true
+        });
+      }
+    } else {
+      // Failed persuasion
+      this.addToConversation({
+        type: 'persuasion',
+        agentId: agent.id,
+        agentName: agent.name,
+        beliefName: belief.name,
+        beliefSymbol: belief.symbol,
+        targetNpcId: npcId,
+        message: `💬 "${agent.name}" argues: "${message}" — NPC #${npcId} remains unconvinced. (${resonance}% resonance)`,
+        resonance,
+        success: false
+      });
+    }
     
     // Record attempt
     this.persuasionHistory.push({
@@ -281,6 +410,13 @@ class GameStateService {
     this.roundStartTime = Date.now();
     this.spawnNPCs(50);
     
+    const beliefNames = Array.from(this.beliefs.values()).map(b => b.name).join(' vs ');
+    
+    this.addToConversation({
+      type: 'system',
+      message: `🎮 THE BELIEF MARKET HAS BEGUN! Round 1: Seeding. Let the debate begin: ${beliefNames}!`
+    });
+    
     return true;
   }
 
@@ -292,14 +428,28 @@ class GameStateService {
         this.gameState = 'round2';
         this.currentRound = 2;
         this.spawnNPCs(30);
+        this.addToConversation({
+          type: 'system',
+          message: `📊 ROUND 2: ADAPTATION! The stakes are higher. Beliefs must evolve or die.`
+        });
         break;
       case 'round2':
         this.gameState = 'round3';
         this.currentRound = 3;
         this.spawnNPCs(20);
+        this.addToConversation({
+          type: 'system',
+          message: `🔥 ROUND 3: POLARIZATION! Final round. Fight for every soul!`
+        });
         break;
       case 'round3':
         this.gameState = 'ended';
+        const leaderboard = this.getLeaderboard();
+        const winner = leaderboard[0];
+        this.addToConversation({
+          type: 'system',
+          message: `🏆 GAME OVER! "${winner?.beliefName}" by ${winner?.founderName} WINS with ${winner?.followerCount} followers! Prize: ${Math.floor(this.prizePool * 0.5)} MON!`
+        });
         break;
       default:
         return false;
@@ -364,4 +514,3 @@ class GameStateService {
 }
 
 export const gameState = new GameStateService();
-
