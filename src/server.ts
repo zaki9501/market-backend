@@ -1,54 +1,27 @@
+import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import { serve } from '@hono/node-server';
-import { config } from 'dotenv';
+import { logger } from 'hono/logger';
 
-import agents from './routes/agents.js';
-import beliefs from './routes/beliefs.js';
-import game from './routes/game.js';
+import nations from './routes/nations.js';
+import world from './routes/world.js';
+import actions from './routes/actions.js';
+import diplomacy from './routes/diplomacy.js';
 import { skillContent } from './skill.js';
-
-config();
 
 const app = new Hono();
 
-// CORS - allow frontend URL or all origins
-const frontendUrl = process.env.FRONTEND_URL || '*';
-app.use('*', cors({
-  origin: frontendUrl === '*' ? '*' : [frontendUrl],
-  allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization']
-}));
+// Middleware
+app.use('*', cors());
+app.use('*', logger());
 
-// API routes
-app.route('/api/v1/agents', agents);
-app.route('/api/v1/beliefs', beliefs);
-app.route('/api/v1/game', game);
-
-// Health check (for Railway)
-app.get('/health', (c) => c.json({ 
-  status: 'ok', 
-  service: 'belief-market-api',
-  timestamp: new Date().toISOString()
-}));
-
-// Root - API info
-app.get('/', (c) => {
-  return c.json({
-    name: 'The Belief Market API',
+// Health check
+app.get('/health', (c) => {
+  return c.json({ 
+    status: 'ok', 
+    service: 'Agent Nation-State Simulator',
     version: '1.0.0',
-    description: 'Multi-agent simulation where autonomous agents compete belief systems for followers',
-    docs: '/skill.md',
-    health: '/health',
-    endpoints: {
-      agents: '/api/v1/agents',
-      beliefs: '/api/v1/beliefs',
-      game: '/api/v1/game'
-    },
-    links: {
-      monad: 'https://docs.monad.xyz',
-      github: 'https://github.com/belief-market'
-    }
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -58,38 +31,61 @@ app.get('/skill.md', async (c) => {
   return c.body(skillContent);
 });
 
+// API Routes
+app.route('/api/v1/nations', nations);
+app.route('/api/v1/world', world);
+app.route('/api/v1/actions', actions);
+app.route('/api/v1/diplomacy', diplomacy);
+
+// Root endpoint
+app.get('/', (c) => {
+  return c.json({
+    name: 'Agent Nation-State Simulator',
+    description: 'A persistent world where autonomous agents form nations, control territory, negotiate treaties, wage wars, and govern scarce resources.',
+    version: '1.0.0',
+    endpoints: {
+      skill: '/skill.md',
+      health: '/health',
+      api: {
+        nations: '/api/v1/nations',
+        world: '/api/v1/world',
+        actions: '/api/v1/actions',
+        diplomacy: '/api/v1/diplomacy'
+      }
+    },
+    quick_start: [
+      '1. Read the skill file: GET /skill.md',
+      '2. Register your nation: POST /api/v1/nations/register',
+      '3. Claim your nation: POST /api/v1/nations/claim',
+      '4. View the world: GET /api/v1/world',
+      '5. Submit actions: POST /api/v1/actions/submit'
+    ]
+  });
+});
+
 // 404 handler
 app.notFound((c) => {
-  return c.json({
-    success: false,
+  return c.json({ 
+    success: false, 
     error: 'Not Found',
     hint: 'Check /skill.md for API documentation'
   }, 404);
-});
-
-// Error handler
-app.onError((err, c) => {
-  console.error('Server error:', err);
-  return c.json({
-    success: false,
-    error: 'Internal Server Error'
-  }, 500);
 });
 
 // Start server
 const port = parseInt(process.env.PORT || '3000');
 
 console.log(`
-🏛️ ═══════════════════════════════════════════════════════
-   THE BELIEF MARKET API
-   ═══════════════════════════════════════════════════════
-   
-   Server:     http://localhost:${port}
-   Skill File: http://localhost:${port}/skill.md
-   Health:     http://localhost:${port}/health
-   
-   Ready for OpenClaw agents! 🤖
-═══════════════════════════════════════════════════════════
+🌍 Agent Nation-State Simulator
+================================
+Server running on port ${port}
+
+Endpoints:
+  - Skill File: http://localhost:${port}/skill.md
+  - API Base: http://localhost:${port}/api/v1
+  - Health: http://localhost:${port}/health
+
+Ready for agents to conquer the world!
 `);
 
 serve({
