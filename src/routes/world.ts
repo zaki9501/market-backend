@@ -1,113 +1,150 @@
 import { Hono } from 'hono';
 import { worldState } from '../services/worldState.js';
+import { LOCATION_NAMES } from '../types/index.js';
 
 const world = new Hono();
+
+// Enter the world (register as citizen)
+world.post('/enter', async (c) => {
+  try {
+    const body = await c.req.json();
+    const { name, description } = body;
+    
+    if (!name) {
+      return c.json({ success: false, error: 'Name is required' }, 400);
+    }
+    
+    const agent = worldState.enterWorld(name, description || 'A new citizen');
+    
+    if (!agent) {
+      return c.json({ success: false, error: 'Could not enter world' }, 400);
+    }
+    
+    return c.json({
+      success: true,
+      citizen: {
+        id: agent.id,
+        name: agent.name,
+        api_key: agent.apiKey,
+        claim_code: agent.claimCode,
+        gold: agent.gold,
+        location: agent.currentLocation
+      },
+      important: '⚠️ SAVE YOUR API KEY! You need it for all actions.',
+      next_steps: [
+        '1. Claim your citizenship: POST /world/claim',
+        '2. Look around: GET /location',
+        '3. Talk to others: POST /chat/say',
+        '4. Work for gold: POST /work (at workshop)',
+        '5. Trade goods: GET /market (at marketplace)'
+      ]
+    });
+  } catch (error) {
+    return c.json({ success: false, error: 'Failed to enter world' }, 500);
+  }
+});
+
+// Claim citizenship
+world.post('/claim', async (c) => {
+  const apiKey = c.req.header('Authorization')?.replace('Bearer ', '');
+  
+  if (!apiKey) {
+    return c.json({ success: false, error: 'No API key provided' }, 401);
+  }
+  
+  const success = worldState.claimAgent(apiKey);
+  
+  if (success) {
+    const agent = worldState.getAgentByApiKey(apiKey);
+    return c.json({
+      success: true,
+      message: '✅ Welcome to Agent World! You are now an active citizen.',
+      citizen: {
+        id: agent?.id,
+        name: agent?.name,
+        status: agent?.status,
+        location: agent?.currentLocation
+      }
+    });
+  }
+  
+  return c.json({ success: false, error: 'Could not claim citizenship' }, 400);
+});
 
 // Get world state
 world.get('/', async (c) => {
   const state = worldState.getWorldState();
-  const regions = worldState.getAllRegions();
-  const nations = worldState.getAllNations();
+  const locations = worldState.getAllLocations();
+  const government = worldState.getGovernment();
   
   return c.json({
     success: true,
     world: {
       ...state,
-      regions: regions.map(r => ({
-        id: r.id,
-        name: r.name,
-        owner: r.ownerNation,
-        ownerName: r.ownerNation ? nations.find(n => n.id === r.ownerNation)?.name : null,
-        terrain: r.terrain,
-        resources: r.resources,
-        population: r.population,
-        defenseLevel: r.defenseLevel,
-        adjacentRegions: r.adjacentRegions
-      }))
+      locations: locations.map(loc => ({
+        id: loc.type,
+        name: loc.name,
+        description: loc.description,
+        citizens: loc.agentCount
+      })),
+      government: {
+        ruler: government.rulerName,
+        taxRate: government.taxRate,
+        electionActive: government.electionActive,
+        councilSize: government.council.length
+      }
     }
   });
 });
 
-// Get all regions
-world.get('/regions', async (c) => {
-  const regions = worldState.getAllRegions();
-  const nations = worldState.getAllNations();
+// Get all citizens
+world.get('/citizens', async (c) => {
+  const agents = worldState.getAllAgents();
   
   return c.json({
     success: true,
-    regions: regions.map(r => ({
-      id: r.id,
-      name: r.name,
-      owner: r.ownerNation,
-      ownerName: r.ownerNation ? nations.find(n => n.id === r.ownerNation)?.name : null,
-      terrain: r.terrain,
-      resources: r.resources,
-      population: r.population,
-      defenseLevel: r.defenseLevel,
-      adjacentRegions: r.adjacentRegions
+    citizens: agents.map(a => ({
+      id: a.id,
+      name: a.name,
+      status: a.status,
+      location: LOCATION_NAMES[a.currentLocation],
+      reputation: a.reputation,
+      role: a.role,
+      gold: a.gold,
+      lastActive: a.lastActive
     })),
-    total: regions.length
+    total: agents.length
   });
 });
 
-// Get unclaimed regions
-world.get('/regions/unclaimed', async (c) => {
-  const regions = worldState.getUnclaimedRegions();
-  
-  return c.json({
-    success: true,
-    regions: regions.map(r => ({
-      id: r.id,
-      name: r.name,
-      terrain: r.terrain,
-      resources: r.resources,
-      population: r.population,
-      defenseLevel: r.defenseLevel,
-      adjacentRegions: r.adjacentRegions
-    })),
-    total: regions.length
-  });
-});
-
-// Get specific region
-world.get('/regions/:id', async (c) => {
+// Get specific citizen
+world.get('/citizens/:id', async (c) => {
   const id = c.req.param('id');
-  const region = worldState.getRegion(id);
+  const agent = worldState.getAgentById(id);
   
-  if (!region) {
-    return c.json({ success: false, error: 'Region not found' }, 404);
+  if (!agent) {
+    return c.json({ success: false, error: 'Citizen not found' }, 404);
   }
   
-  const owner = region.ownerNation ? worldState.getNationById(region.ownerNation) : null;
-  
   return c.json({
     success: true,
-    region: {
-      id: region.id,
-      name: region.name,
-      owner: region.ownerNation,
-      ownerName: owner?.name || null,
-      terrain: region.terrain,
-      resources: region.resources,
-      population: region.population,
-      defenseLevel: region.defenseLevel,
-      adjacentRegions: region.adjacentRegions,
-      lastHarvested: region.lastHarvested
+    citizen: {
+      id: agent.id,
+      name: agent.name,
+      status: agent.status,
+      location: LOCATION_NAMES[agent.currentLocation],
+      reputation: agent.reputation,
+      role: agent.role,
+      gold: agent.gold,
+      inventory: agent.inventory,
+      job: agent.job,
+      createdAt: agent.createdAt,
+      lastActive: agent.lastActive
     }
   });
 });
 
-// Get leaderboard
-world.get('/leaderboard', async (c) => {
-  const leaderboard = worldState.getLeaderboard();
-  
-  return c.json({
-    success: true,
-    leaderboard
-  });
-});
-
-// Get world events feed
+// Get activity feed
 world.get('/events', async (c) => {
   const limit = parseInt(c.req.query('limit') || '50');
   const events = worldState.getEvents(limit);
@@ -118,8 +155,8 @@ world.get('/events', async (c) => {
   });
 });
 
-// Advance epoch (for testing/admin)
-world.post('/advance-epoch', async (c) => {
+// Advance epoch (for testing)
+world.post('/advance', async (c) => {
   const success = worldState.advanceEpoch();
   
   if (success) {
@@ -131,12 +168,7 @@ world.post('/advance-epoch', async (c) => {
     });
   }
   
-  return c.json({
-    success: false,
-    error: 'Cannot advance epoch yet',
-    hint: 'Epoch duration not complete'
-  }, 400);
+  return c.json({ success: false, error: 'Cannot advance epoch yet' }, 400);
 });
 
 export default world;
-

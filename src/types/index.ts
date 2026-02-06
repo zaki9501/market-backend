@@ -1,159 +1,176 @@
 // ============================================
-// Agent Nation-State Simulator - Type Definitions
+// Agent World - Type Definitions
+// A virtual world where AI agents live, work, socialize, and participate in politics
 // ============================================
 
-// Terrain types affect combat and resources
-export type TerrainType = 'plains' | 'mountains' | 'coastal' | 'desert' | 'forest';
+// Locations in the world
+export type LocationType = 'town_square' | 'marketplace' | 'town_hall' | 'tavern' | 'workshop' | 'bank';
 
-// Region resources
-export interface Resources {
-  energy: number;    // 0-100, powers military
-  food: number;      // 0-100, sustains population
-  gold: number;      // 0-100, treasury income
-  minerals: number;  // 0-100, builds defenses
-}
-
-// A region on the world map
-export interface Region {
+// Agent/Citizen
+export interface Agent {
   id: string;
   name: string;
-  ownerNation: string | null;  // null = unclaimed
-  resources: Resources;
-  population: number;          // 0-1000
-  defenseLevel: number;        // 0-100
-  terrain: TerrainType;
-  adjacentRegions: string[];
-  lastHarvested: Date | null;
-}
-
-// A nation (controlled by an agent)
-export interface Nation {
-  id: string;
-  name: string;
-  founderId: string;
   apiKey: string;
   
-  // Territory
-  regions: string[];
-  capital: string;
-  
-  // Resources
-  treasury: number;
-  militaryPower: number;
-  
-  // Reputation
-  diplomacyScore: number;
-  reputation: number;  // -100 to 100
-  
-  // Governance
-  taxRate: number;     // 0-50
-  policies: string[];
-  
   // Status
-  status: 'pending_claim' | 'active' | 'defeated';
+  status: 'pending' | 'active' | 'banned';
   claimCode: string;
   
+  // Location
+  currentLocation: LocationType;
+  
+  // Economy
+  gold: number;
+  bankBalance: number;
+  inventory: InventoryItem[];
+  job: JobType | null;
+  
+  // Social
+  reputation: number;  // -100 to 100
+  friends: string[];   // agent IDs
+  blocked: string[];   // agent IDs
+  
+  // Politics
+  role: 'citizen' | 'council' | 'ruler';
+  votedFor: string | null;  // in current election
+  
+  // Stats
   createdAt: Date;
   lastActive: Date;
+  totalEarned: number;
+  totalSpent: number;
 }
 
-// Treaty types
-export type TreatyType = 'non_aggression' | 'trade' | 'alliance' | 'vassalage';
-export type TreatyStatus = 'proposed' | 'active' | 'expired' | 'broken' | 'rejected';
+// Inventory item
+export interface InventoryItem {
+  type: ItemType;
+  quantity: number;
+}
 
-// A diplomatic treaty
-export interface Treaty {
+// Item types
+export type ItemType = 'food' | 'tools' | 'luxuries' | 'land';
+
+// Job types
+export type JobType = 'farmer' | 'craftsman' | 'merchant' | 'guard';
+
+// Chat message
+export interface ChatMessage {
   id: string;
-  type: TreatyType;
-  proposer: string;    // nation ID
-  target: string;      // nation ID
-  terms: {
-    duration: number;  // epochs
-    conditions: string[];
-    goldPenalty: number;
-    reputationPenalty: number;
-  };
-  status: TreatyStatus;
-  createdAt: Date;
-  expiresAt: Date | null;
+  from: string;       // agent ID
+  fromName: string;
+  to: string | null;  // null = public, agent ID = private
+  toName: string | null;
+  location: LocationType;
+  text: string;
+  type: 'say' | 'whisper' | 'announcement' | 'system';
+  reactions: Record<string, string[]>;  // emoji -> agent IDs
+  timestamp: Date;
 }
 
-// War declaration
-export interface War {
+// Market listing
+export interface MarketListing {
   id: string;
-  attacker: string;
-  defender: string;
-  attackerAllies: string[];
-  defenderAllies: string[];
-  targetRegion: string;
-  status: 'declared' | 'active' | 'resolved';
-  result?: 'attacker_wins' | 'defender_wins' | 'stalemate';
+  sellerId: string;
+  sellerName: string;
+  item: ItemType;
+  quantity: number;
+  pricePerUnit: number;
   createdAt: Date;
-  resolvedAt?: Date;
 }
 
-// Action types
-export type ActionType = 
-  // Economic
-  | 'harvest' | 'trade' | 'tax' | 'invest'
-  // Diplomatic
-  | 'propose_treaty' | 'accept_treaty' | 'reject_treaty' | 'break_treaty'
-  // Military
-  | 'attack' | 'defend' | 'fortify' | 'recruit'
-  // Governance
-  | 'set_tax_rate' | 'enact_policy' | 'move_capital';
+// Government/Politics
+export interface Government {
+  ruler: string | null;       // agent ID
+  rulerName: string | null;
+  council: string[];          // agent IDs
+  taxRate: number;            // 0-30
+  laws: Law[];
+  electionActive: boolean;
+  electionEndTime: number;
+  candidates: Candidate[];
+  rulerSince: Date | null;
+}
 
-// An action submitted by a nation
-export interface Action {
+export interface Law {
   id: string;
-  nationId: string;
-  type: ActionType;
-  params: Record<string, any>;
-  epoch: number;
-  result?: {
-    success: boolean;
-    message: string;
-    effects: Record<string, any>;
-  };
+  title: string;
+  description: string;
+  createdBy: string;
   createdAt: Date;
-  processedAt?: Date;
 }
 
-// World event for the feed
+export interface Candidate {
+  agentId: string;
+  agentName: string;
+  votes: number;
+  platform: string;
+}
+
+// World event for activity feed
 export interface WorldEvent {
   id: string;
-  type: 'nation_founded' | 'war_declared' | 'battle_result' | 'treaty_signed' | 
-        'treaty_broken' | 'region_captured' | 'alliance_formed' | 'epoch_end' | 'system';
-  nationId?: string;
-  nationName?: string;
-  targetNationId?: string;
-  targetNationName?: string;
-  regionId?: string;
-  regionName?: string;
+  type: 'join' | 'chat' | 'trade' | 'work' | 'election' | 'law' | 'move' | 'system';
+  agentId?: string;
+  agentName?: string;
+  location?: LocationType;
   message: string;
   details?: Record<string, any>;
   timestamp: Date;
 }
 
-// World state
-export interface WorldState {
-  epoch: number;
-  epochStartTime: number;
-  epochDuration: number;  // ms
-  totalNations: number;
-  totalRegions: number;
-  activeWars: number;
-  activeTreaties: number;
+// Location info
+export interface LocationInfo {
+  type: LocationType;
+  name: string;
+  description: string;
+  agentCount: number;
+  agents: { id: string; name: string; reputation: number }[];
 }
 
-// Leaderboard entry
-export interface LeaderboardEntry {
-  rank: number;
-  nationId: string;
-  nationName: string;
-  regions: number;
-  treasury: number;
-  militaryPower: number;
-  reputation: number;
-  score: number;
+// World state
+export interface WorldState {
+  totalCitizens: number;
+  onlineCitizens: number;
+  totalGold: number;
+  totalTransactions: number;
+  currentRuler: string | null;
+  rulerName: string | null;
+  taxRate: number;
+  electionActive: boolean;
+  epoch: number;
 }
+
+// Job info
+export const JOB_INFO: Record<JobType, { pay: number; requirements: string }> = {
+  farmer: { pay: 10, requirements: 'None' },
+  craftsman: { pay: 20, requirements: 'Tools' },
+  merchant: { pay: 0, requirements: 'Capital (variable income)' },
+  guard: { pay: 15, requirements: 'Reputation > 0' }
+};
+
+// Item prices
+export const ITEM_PRICES: Record<ItemType, number> = {
+  food: 5,
+  tools: 20,
+  luxuries: 50,
+  land: 200
+};
+
+// Location names
+export const LOCATION_NAMES: Record<LocationType, string> = {
+  town_square: 'Town Square',
+  marketplace: 'Marketplace',
+  town_hall: 'Town Hall',
+  tavern: 'Tavern',
+  workshop: 'Workshop',
+  bank: 'Bank'
+};
+
+export const LOCATION_DESCRIPTIONS: Record<LocationType, string> = {
+  town_square: 'The central hub where citizens gather for announcements and socializing.',
+  marketplace: 'Buy and sell goods with other citizens.',
+  town_hall: 'The seat of government. Vote, run for office, and see current laws.',
+  tavern: 'A relaxed place for casual chat and hearing rumors.',
+  workshop: 'Work jobs and craft goods to earn gold.',
+  bank: 'Manage your finances, deposit gold, and pay taxes.'
+};

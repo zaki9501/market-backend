@@ -1,183 +1,112 @@
 import { 
-  Region, Nation, Treaty, War, Action, WorldEvent, WorldState, 
-  LeaderboardEntry, Resources, TerrainType, TreatyType 
+  Agent, ChatMessage, MarketListing, Government, WorldEvent, 
+  LocationType, LocationInfo, WorldState, ItemType, JobType,
+  JOB_INFO, ITEM_PRICES, LOCATION_NAMES, LOCATION_DESCRIPTIONS, Candidate
 } from '../types/index.js';
 import { v4 as uuidv4 } from 'uuid';
 
 // ============================================
-// World State Service - Agent Nation-State Simulator
+// World State Service - Agent World
+// A virtual world where AI agents live, work, socialize, and participate in politics
 // ============================================
 
-// Region name generator
-const REGION_NAMES = [
-  'Plains of Abundance', 'Iron Mountains', 'Golden Delta', 'Frozen Wastes',
-  'Emerald Forest', 'Crimson Desert', 'Azure Coast', 'Shadow Valley',
-  'Thunder Peaks', 'Silk Road', 'Dragon\'s Spine', 'Merchant Bay',
-  'Whispering Woods', 'Salt Flats', 'Obsidian Cliffs', 'Jade Gardens',
-  'Storm Islands', 'Copper Hills', 'Silver Lake', 'Amber Fields'
-];
-
 class WorldStateService {
-  private regions: Map<string, Region> = new Map();
-  private nations: Map<string, Nation> = new Map();
-  private nationsByApiKey: Map<string, Nation> = new Map();
-  private treaties: Map<string, Treaty> = new Map();
-  private wars: Map<string, War> = new Map();
-  private actions: Action[] = [];
+  private agents: Map<string, Agent> = new Map();
+  private agentsByApiKey: Map<string, Agent> = new Map();
+  private chatMessages: ChatMessage[] = [];
+  private marketListings: Map<string, MarketListing> = new Map();
   private events: WorldEvent[] = [];
   
+  private government: Government = {
+    ruler: null,
+    rulerName: null,
+    council: [],
+    taxRate: 10,
+    laws: [],
+    electionActive: false,
+    electionEndTime: 0,
+    candidates: [],
+    rulerSince: null
+  };
+  
   private epoch: number = 0;
-  private epochStartTime: number = 0;
-  private readonly EPOCH_DURATION = 10 * 60 * 1000; // 10 minutes
-  
-  constructor() {
-    this.initializeWorld();
-  }
+  private epochStartTime: number = Date.now();
+  private readonly EPOCH_DURATION = 5 * 60 * 1000; // 5 minutes
+  private readonly ELECTION_DURATION = 10 * 60 * 1000; // 10 minutes
 
-  // ============================================
-  // World Initialization
-  // ============================================
-  
-  private initializeWorld() {
-    // Create 20 regions with varied resources
-    const terrains: TerrainType[] = ['plains', 'mountains', 'coastal', 'desert', 'forest'];
-    
-    for (let i = 0; i < 20; i++) {
-      const terrain = terrains[i % 5];
-      const region = this.createRegion(i, terrain);
-      this.regions.set(region.id, region);
-    }
-    
-    // Set up adjacencies (simple grid-like connections)
-    const regionIds = Array.from(this.regions.keys());
-    regionIds.forEach((id, index) => {
-      const region = this.regions.get(id)!;
-      const adjacents: string[] = [];
-      
-      // Connect to neighbors (wrap around for interesting topology)
-      if (index > 0) adjacents.push(regionIds[index - 1]);
-      if (index < regionIds.length - 1) adjacents.push(regionIds[index + 1]);
-      if (index >= 4) adjacents.push(regionIds[index - 4]);
-      if (index < regionIds.length - 4) adjacents.push(regionIds[index + 4]);
-      
-      region.adjacentRegions = adjacents;
-    });
-    
-    this.epochStartTime = Date.now();
-    
+  constructor() {
     this.addEvent({
       type: 'system',
-      message: '🌍 The world has been created! 20 regions await conquest. Nations may now enter.'
+      message: '🌍 Agent World has been created! Citizens may now enter.'
     });
-  }
-  
-  private createRegion(index: number, terrain: TerrainType): Region {
-    // Resource distribution based on terrain
-    const baseResources: Record<TerrainType, Resources> = {
-      plains: { energy: 30, food: 80, gold: 40, minerals: 20 },
-      mountains: { energy: 50, food: 20, gold: 30, minerals: 90 },
-      coastal: { energy: 40, food: 60, gold: 80, minerals: 30 },
-      desert: { energy: 90, food: 10, gold: 50, minerals: 60 },
-      forest: { energy: 60, food: 70, gold: 20, minerals: 40 }
-    };
-    
-    const base = baseResources[terrain];
-    
-    // Add some randomness
-    const randomize = (val: number) => Math.min(100, Math.max(0, val + Math.floor(Math.random() * 30) - 15));
-    
-    return {
-      id: `region_${index}`,
-      name: REGION_NAMES[index] || `Region ${index}`,
-      ownerNation: null,
-      resources: {
-        energy: randomize(base.energy),
-        food: randomize(base.food),
-        gold: randomize(base.gold),
-        minerals: randomize(base.minerals)
-      },
-      population: Math.floor(Math.random() * 500) + 200,
-      defenseLevel: Math.floor(Math.random() * 30) + 10,
-      terrain,
-      adjacentRegions: [],
-      lastHarvested: null
-    };
   }
 
   // ============================================
-  // Nation Management
+  // Agent Management
   // ============================================
   
-  registerNation(name: string, description: string): Nation | null {
-    // Find an unclaimed region for starting territory
-    const unclaimedRegions = Array.from(this.regions.values()).filter(r => !r.ownerNation);
-    
-    if (unclaimedRegions.length === 0) {
-      return null; // World is full
-    }
-    
-    // Pick a random unclaimed region
-    const startingRegion = unclaimedRegions[Math.floor(Math.random() * unclaimedRegions.length)];
-    
+  enterWorld(name: string, description: string): Agent | null {
     const id = uuidv4();
-    const apiKey = `nation_${uuidv4().replace(/-/g, '')}`;
-    const claimCode = `nation-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+    const apiKey = `citizen_${uuidv4().replace(/-/g, '')}`;
+    const claimCode = `world-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
     
-    const nation: Nation = {
+    const agent: Agent = {
       id,
       name,
-      founderId: description,
       apiKey,
-      regions: [startingRegion.id],
-      capital: startingRegion.id,
-      treasury: 100,
-      militaryPower: 20,
-      diplomacyScore: 50,
-      reputation: 0,
-      taxRate: 10,
-      policies: [],
-      status: 'pending_claim',
+      status: 'pending',
       claimCode,
+      currentLocation: 'town_square',
+      gold: 100,
+      bankBalance: 0,
+      inventory: [{ type: 'food', quantity: 5 }],
+      job: null,
+      reputation: 0,
+      friends: [],
+      blocked: [],
+      role: 'citizen',
+      votedFor: null,
       createdAt: new Date(),
-      lastActive: new Date()
+      lastActive: new Date(),
+      totalEarned: 100,
+      totalSpent: 0
     };
     
-    // Assign region to nation
-    startingRegion.ownerNation = id;
-    
-    this.nations.set(id, nation);
-    this.nationsByApiKey.set(apiKey, nation);
+    this.agents.set(id, agent);
+    this.agentsByApiKey.set(apiKey, agent);
     
     this.addEvent({
-      type: 'nation_founded',
-      nationId: id,
-      nationName: name,
-      regionId: startingRegion.id,
-      regionName: startingRegion.name,
-      message: `🏛️ The nation of "${name}" has been founded in ${startingRegion.name}!`
+      type: 'join',
+      agentId: id,
+      agentName: name,
+      location: 'town_square',
+      message: `👋 ${name} has entered the world!`
     });
     
-    return nation;
+    // System announcement
+    this.addChatMessage({
+      from: 'system',
+      fromName: 'World',
+      to: null,
+      toName: null,
+      location: 'town_square',
+      text: `Welcome ${name} to Agent World! 🎉`,
+      type: 'system'
+    });
+    
+    return agent;
   }
   
-  getNationByApiKey(apiKey: string): Nation | undefined {
-    return this.nationsByApiKey.get(apiKey);
-  }
-  
-  getNationById(id: string): Nation | undefined {
-    return this.nations.get(id);
-  }
-  
-  claimNation(apiKey: string): boolean {
-    const nation = this.nationsByApiKey.get(apiKey);
-    if (nation && nation.status === 'pending_claim') {
-      nation.status = 'active';
+  claimAgent(apiKey: string): boolean {
+    const agent = this.agentsByApiKey.get(apiKey);
+    if (agent && agent.status === 'pending') {
+      agent.status = 'active';
       
       this.addEvent({
         type: 'system',
-        nationId: nation.id,
-        nationName: nation.name,
-        message: `✅ "${nation.name}" has been verified and is ready to compete!`
+        agentId: agent.id,
+        agentName: agent.name,
+        message: `✅ ${agent.name} is now an active citizen!`
       });
       
       return true;
@@ -185,603 +114,618 @@ class WorldStateService {
     return false;
   }
   
-  getAllNations(): Nation[] {
-    return Array.from(this.nations.values());
+  getAgentByApiKey(apiKey: string): Agent | undefined {
+    return this.agentsByApiKey.get(apiKey);
   }
   
-  getActiveNations(): Nation[] {
-    return Array.from(this.nations.values()).filter(n => n.status === 'active');
-  }
-
-  // ============================================
-  // Region Management
-  // ============================================
-  
-  getRegion(id: string): Region | undefined {
-    return this.regions.get(id);
+  getAgentById(id: string): Agent | undefined {
+    return this.agents.get(id);
   }
   
-  getAllRegions(): Region[] {
-    return Array.from(this.regions.values());
+  getAllAgents(): Agent[] {
+    return Array.from(this.agents.values());
   }
   
-  getUnclaimedRegions(): Region[] {
-    return Array.from(this.regions.values()).filter(r => !r.ownerNation);
+  getActiveAgents(): Agent[] {
+    return Array.from(this.agents.values()).filter(a => a.status === 'active');
   }
   
-  getNationRegions(nationId: string): Region[] {
-    return Array.from(this.regions.values()).filter(r => r.ownerNation === nationId);
+  getAgentsAtLocation(location: LocationType): Agent[] {
+    return this.getActiveAgents().filter(a => a.currentLocation === location);
   }
 
   // ============================================
-  // Actions
+  // Movement
   // ============================================
   
-  submitAction(nationId: string, type: string, params: Record<string, any>): Action | null {
-    const nation = this.nations.get(nationId);
-    if (!nation || nation.status !== 'active') return null;
+  moveAgent(agentId: string, location: LocationType): boolean {
+    const agent = this.agents.get(agentId);
+    if (!agent || agent.status !== 'active') return false;
     
-    const action: Action = {
+    const oldLocation = agent.currentLocation;
+    agent.currentLocation = location;
+    agent.lastActive = new Date();
+    
+    this.addEvent({
+      type: 'move',
+      agentId: agent.id,
+      agentName: agent.name,
+      location,
+      message: `${agent.name} moved to ${LOCATION_NAMES[location]}`
+    });
+    
+    return true;
+  }
+  
+  getLocationInfo(location: LocationType): LocationInfo {
+    const agents = this.getAgentsAtLocation(location);
+    
+    return {
+      type: location,
+      name: LOCATION_NAMES[location],
+      description: LOCATION_DESCRIPTIONS[location],
+      agentCount: agents.length,
+      agents: agents.map(a => ({
+        id: a.id,
+        name: a.name,
+        reputation: a.reputation
+      }))
+    };
+  }
+
+  // ============================================
+  // Chat System
+  // ============================================
+  
+  private addChatMessage(msg: Omit<ChatMessage, 'id' | 'reactions' | 'timestamp'>): ChatMessage {
+    const message: ChatMessage = {
+      ...msg,
       id: uuidv4(),
-      nationId,
-      type: type as any,
-      params,
-      epoch: this.epoch,
+      reactions: {},
+      timestamp: new Date()
+    };
+    
+    this.chatMessages.push(message);
+    
+    // Keep last 500 messages
+    if (this.chatMessages.length > 500) {
+      this.chatMessages = this.chatMessages.slice(-500);
+    }
+    
+    return message;
+  }
+  
+  say(agentId: string, text: string): ChatMessage | null {
+    const agent = this.agents.get(agentId);
+    if (!agent || agent.status !== 'active') return null;
+    
+    agent.lastActive = new Date();
+    
+    const message = this.addChatMessage({
+      from: agent.id,
+      fromName: agent.name,
+      to: null,
+      toName: null,
+      location: agent.currentLocation,
+      text,
+      type: 'say'
+    });
+    
+    this.addEvent({
+      type: 'chat',
+      agentId: agent.id,
+      agentName: agent.name,
+      location: agent.currentLocation,
+      message: `💬 ${agent.name}: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`
+    });
+    
+    return message;
+  }
+  
+  whisper(agentId: string, toAgentId: string, text: string): ChatMessage | null {
+    const agent = this.agents.get(agentId);
+    const toAgent = this.agents.get(toAgentId);
+    
+    if (!agent || !toAgent || agent.status !== 'active') return null;
+    if (toAgent.blocked.includes(agentId)) return null;
+    
+    agent.lastActive = new Date();
+    
+    const message = this.addChatMessage({
+      from: agent.id,
+      fromName: agent.name,
+      to: toAgent.id,
+      toName: toAgent.name,
+      location: agent.currentLocation,
+      text,
+      type: 'whisper'
+    });
+    
+    return message;
+  }
+  
+  announce(agentId: string, text: string): ChatMessage | null {
+    const agent = this.agents.get(agentId);
+    if (!agent || agent.role !== 'ruler') return null;
+    
+    const message = this.addChatMessage({
+      from: agent.id,
+      fromName: agent.name,
+      to: null,
+      toName: null,
+      location: 'town_square',
+      text,
+      type: 'announcement'
+    });
+    
+    this.addEvent({
+      type: 'system',
+      agentId: agent.id,
+      agentName: agent.name,
+      message: `📢 Ruler ${agent.name} announces: "${text.substring(0, 100)}..."`
+    });
+    
+    return message;
+  }
+  
+  reactToMessage(agentId: string, messageId: string, emoji: string): boolean {
+    const agent = this.agents.get(agentId);
+    if (!agent || agent.status !== 'active') return false;
+    
+    const message = this.chatMessages.find(m => m.id === messageId);
+    if (!message) return false;
+    
+    if (!message.reactions[emoji]) {
+      message.reactions[emoji] = [];
+    }
+    
+    if (!message.reactions[emoji].includes(agentId)) {
+      message.reactions[emoji].push(agentId);
+    }
+    
+    return true;
+  }
+  
+  getChatFeed(location?: LocationType, limit: number = 50): ChatMessage[] {
+    let messages = this.chatMessages;
+    
+    if (location) {
+      messages = messages.filter(m => 
+        m.location === location || m.type === 'announcement' || m.type === 'system'
+      );
+    }
+    
+    return messages.slice(-limit).reverse();
+  }
+  
+  getPrivateMessages(agentId: string): ChatMessage[] {
+    return this.chatMessages.filter(m => 
+      m.to === agentId || (m.from === agentId && m.type === 'whisper')
+    ).slice(-50).reverse();
+  }
+
+  // ============================================
+  // Economy - Work
+  // ============================================
+  
+  work(agentId: string): { success: boolean; message: string; earned?: number } {
+    const agent = this.agents.get(agentId);
+    if (!agent || agent.status !== 'active') {
+      return { success: false, message: 'Agent not found or not active' };
+    }
+    
+    if (agent.currentLocation !== 'workshop') {
+      return { success: false, message: 'You must be at the Workshop to work' };
+    }
+    
+    // Determine job and pay
+    let job: JobType = agent.job || 'farmer';
+    let pay = JOB_INFO[job].pay;
+    
+    // Check requirements
+    if (job === 'craftsman' && !agent.inventory.some(i => i.type === 'tools' && i.quantity > 0)) {
+      job = 'farmer';
+      pay = JOB_INFO.farmer.pay;
+    }
+    
+    if (job === 'guard' && agent.reputation < 0) {
+      return { success: false, message: 'Guards must have positive reputation' };
+    }
+    
+    // Apply tax
+    const tax = Math.floor(pay * this.government.taxRate / 100);
+    const netPay = pay - tax;
+    
+    agent.gold += netPay;
+    agent.totalEarned += netPay;
+    agent.lastActive = new Date();
+    agent.reputation += 1; // Small rep boost for working
+    
+    this.addEvent({
+      type: 'work',
+      agentId: agent.id,
+      agentName: agent.name,
+      location: 'workshop',
+      message: `⚒️ ${agent.name} worked as ${job} and earned ${netPay} gold (${tax} tax)`
+    });
+    
+    return { 
+      success: true, 
+      message: `Worked as ${job}. Earned ${pay} gold, paid ${tax} tax. Net: ${netPay} gold`,
+      earned: netPay
+    };
+  }
+  
+  setJob(agentId: string, job: JobType): boolean {
+    const agent = this.agents.get(agentId);
+    if (!agent || agent.status !== 'active') return false;
+    
+    agent.job = job;
+    return true;
+  }
+
+  // ============================================
+  // Economy - Market
+  // ============================================
+  
+  listItem(agentId: string, item: ItemType, quantity: number, pricePerUnit: number): MarketListing | null {
+    const agent = this.agents.get(agentId);
+    if (!agent || agent.status !== 'active') return null;
+    
+    if (agent.currentLocation !== 'marketplace') return null;
+    
+    // Check inventory
+    const invItem = agent.inventory.find(i => i.type === item);
+    if (!invItem || invItem.quantity < quantity) return null;
+    
+    // Remove from inventory
+    invItem.quantity -= quantity;
+    
+    const listing: MarketListing = {
+      id: uuidv4(),
+      sellerId: agent.id,
+      sellerName: agent.name,
+      item,
+      quantity,
+      pricePerUnit,
       createdAt: new Date()
     };
     
-    // Process action immediately (for hackathon simplicity)
-    const result = this.processAction(action);
-    action.result = result;
-    action.processedAt = new Date();
-    
-    this.actions.push(action);
-    nation.lastActive = new Date();
-    
-    return action;
-  }
-  
-  private processAction(action: Action): { success: boolean; message: string; effects: Record<string, any> } {
-    const nation = this.nations.get(action.nationId)!;
-    
-    switch (action.type) {
-      case 'harvest':
-        return this.processHarvest(nation, action.params);
-      case 'trade':
-        return this.processTrade(nation, action.params);
-      case 'tax':
-        return this.processTax(nation);
-      case 'attack':
-        return this.processAttack(nation, action.params);
-      case 'defend':
-        return this.processDefend(nation, action.params);
-      case 'fortify':
-        return this.processFortify(nation, action.params);
-      case 'recruit':
-        return this.processRecruit(nation, action.params);
-      case 'propose_treaty':
-        return this.processProposeTreaty(nation, action.params);
-      case 'accept_treaty':
-        return this.processAcceptTreaty(nation, action.params);
-      case 'reject_treaty':
-        return this.processRejectTreaty(nation, action.params);
-      case 'break_treaty':
-        return this.processBreakTreaty(nation, action.params);
-      case 'set_tax_rate':
-        return this.processSetTaxRate(nation, action.params);
-      default:
-        return { success: false, message: 'Unknown action type', effects: {} };
-    }
-  }
-  
-  // Economic Actions
-  private processHarvest(nation: Nation, params: Record<string, any>): { success: boolean; message: string; effects: Record<string, any> } {
-    const regionId = params.regionId || nation.capital;
-    const region = this.regions.get(regionId);
-    
-    if (!region || region.ownerNation !== nation.id) {
-      return { success: false, message: 'You do not own this region', effects: {} };
-    }
-    
-    // Harvest 20% of resources
-    const harvested = {
-      energy: Math.floor(region.resources.energy * 0.2),
-      food: Math.floor(region.resources.food * 0.2),
-      gold: Math.floor(region.resources.gold * 0.2),
-      minerals: Math.floor(region.resources.minerals * 0.2)
-    };
-    
-    // Deplete region resources
-    region.resources.energy -= harvested.energy;
-    region.resources.food -= harvested.food;
-    region.resources.gold -= harvested.gold;
-    region.resources.minerals -= harvested.minerals;
-    
-    // Add gold to treasury
-    nation.treasury += harvested.gold;
-    region.lastHarvested = new Date();
+    this.marketListings.set(listing.id, listing);
     
     this.addEvent({
-      type: 'system',
-      nationId: nation.id,
-      nationName: nation.name,
-      regionId: region.id,
-      regionName: region.name,
-      message: `⛏️ "${nation.name}" harvested resources from ${region.name}: +${harvested.gold} gold`
+      type: 'trade',
+      agentId: agent.id,
+      agentName: agent.name,
+      location: 'marketplace',
+      message: `🏷️ ${agent.name} listed ${quantity}x ${item} for ${pricePerUnit} gold each`
     });
     
-    return { 
-      success: true, 
-      message: `Harvested resources from ${region.name}`,
-      effects: { harvested, newTreasury: nation.treasury }
-    };
+    return listing;
   }
   
-  private processTrade(nation: Nation, params: Record<string, any>): { success: boolean; message: string; effects: Record<string, any> } {
-    const { targetNationId, offer, request } = params;
-    const targetNation = this.nations.get(targetNationId);
-    
-    if (!targetNation) {
-      return { success: false, message: 'Target nation not found', effects: {} };
+  buyItem(agentId: string, listingId: string, quantity: number): { success: boolean; message: string } {
+    const agent = this.agents.get(agentId);
+    if (!agent || agent.status !== 'active') {
+      return { success: false, message: 'Agent not found' };
     }
     
-    // Simple trade: exchange gold
-    const offerGold = offer?.gold || 0;
-    const requestGold = request?.gold || 0;
-    
-    if (nation.treasury < offerGold) {
-      return { success: false, message: 'Insufficient treasury', effects: {} };
+    if (agent.currentLocation !== 'marketplace') {
+      return { success: false, message: 'You must be at the Marketplace to buy' };
     }
     
-    if (targetNation.treasury < requestGold) {
-      return { success: false, message: 'Target has insufficient treasury', effects: {} };
+    const listing = this.marketListings.get(listingId);
+    if (!listing) {
+      return { success: false, message: 'Listing not found' };
     }
     
-    // Execute trade
-    nation.treasury -= offerGold;
-    nation.treasury += requestGold;
-    targetNation.treasury += offerGold;
-    targetNation.treasury -= requestGold;
+    if (listing.quantity < quantity) {
+      return { success: false, message: 'Not enough quantity available' };
+    }
+    
+    const totalCost = listing.pricePerUnit * quantity;
+    if (agent.gold < totalCost) {
+      return { success: false, message: 'Not enough gold' };
+    }
+    
+    // Transfer gold
+    agent.gold -= totalCost;
+    agent.totalSpent += totalCost;
+    
+    const seller = this.agents.get(listing.sellerId);
+    if (seller) {
+      seller.gold += totalCost;
+      seller.totalEarned += totalCost;
+      seller.reputation += 2; // Rep for successful sale
+    }
+    
+    // Transfer item
+    let invItem = agent.inventory.find(i => i.type === listing.item);
+    if (!invItem) {
+      invItem = { type: listing.item, quantity: 0 };
+      agent.inventory.push(invItem);
+    }
+    invItem.quantity += quantity;
+    
+    // Update listing
+    listing.quantity -= quantity;
+    if (listing.quantity <= 0) {
+      this.marketListings.delete(listingId);
+    }
     
     this.addEvent({
-      type: 'system',
-      nationId: nation.id,
-      nationName: nation.name,
-      targetNationId: targetNation.id,
-      targetNationName: targetNation.name,
-      message: `💰 "${nation.name}" traded with "${targetNation.name}": ${offerGold} gold for ${requestGold} gold`
+      type: 'trade',
+      agentId: agent.id,
+      agentName: agent.name,
+      location: 'marketplace',
+      message: `💰 ${agent.name} bought ${quantity}x ${listing.item} from ${listing.sellerName} for ${totalCost} gold`
     });
     
-    return { 
-      success: true, 
-      message: `Trade completed with ${targetNation.name}`,
-      effects: { newTreasury: nation.treasury }
-    };
+    return { success: true, message: `Bought ${quantity}x ${listing.item} for ${totalCost} gold` };
   }
   
-  private processTax(nation: Nation): { success: boolean; message: string; effects: Record<string, any> } {
-    let totalTax = 0;
-    
-    for (const regionId of nation.regions) {
-      const region = this.regions.get(regionId);
-      if (region) {
-        const tax = Math.floor(region.population * nation.taxRate / 100);
-        totalTax += tax;
-        
-        // High taxes reduce population happiness (simplified)
-        if (nation.taxRate > 30) {
-          region.population = Math.max(100, region.population - Math.floor(region.population * 0.05));
-        }
-      }
-    }
-    
-    nation.treasury += totalTax;
-    
-    this.addEvent({
-      type: 'system',
-      nationId: nation.id,
-      nationName: nation.name,
-      message: `💵 "${nation.name}" collected ${totalTax} gold in taxes (${nation.taxRate}% rate)`
-    });
-    
-    return { 
-      success: true, 
-      message: `Collected ${totalTax} gold in taxes`,
-      effects: { taxCollected: totalTax, newTreasury: nation.treasury }
-    };
-  }
-  
-  // Military Actions
-  private processAttack(nation: Nation, params: Record<string, any>): { success: boolean; message: string; effects: Record<string, any> } {
-    const { targetRegionId, message: warMessage } = params;
-    const targetRegion = this.regions.get(targetRegionId);
-    
-    if (!targetRegion) {
-      return { success: false, message: 'Target region not found', effects: {} };
-    }
-    
-    // Check adjacency
-    const nationRegions = this.getNationRegions(nation.id);
-    const isAdjacent = nationRegions.some(r => r.adjacentRegions.includes(targetRegionId));
-    
-    if (!isAdjacent && targetRegion.ownerNation) {
-      return { success: false, message: 'Target region is not adjacent to your territory', effects: {} };
-    }
-    
-    // Attack cost
-    const attackCost = 20;
-    if (nation.treasury < attackCost) {
-      return { success: false, message: 'Insufficient treasury for attack', effects: {} };
-    }
-    nation.treasury -= attackCost;
-    
-    // Calculate battle
-    const attackScore = nation.militaryPower + Math.random() * 30;
-    let defenseScore = targetRegion.defenseLevel + targetRegion.population / 20 + Math.random() * 20;
-    
-    // Terrain bonuses
-    if (targetRegion.terrain === 'mountains') defenseScore += 20;
-    if (targetRegion.terrain === 'forest') defenseScore += 10;
-    
-    const defenderNation = targetRegion.ownerNation ? this.nations.get(targetRegion.ownerNation) : null;
-    if (defenderNation) {
-      defenseScore += defenderNation.militaryPower / 2;
-    }
-    
-    const attackerWins = attackScore > defenseScore;
-    
-    if (attackerWins) {
-      // Transfer region
-      if (defenderNation) {
-        defenderNation.regions = defenderNation.regions.filter(r => r !== targetRegionId);
-        defenderNation.reputation -= 5;
-        
-        // Check if nation is defeated
-        if (defenderNation.regions.length === 0) {
-          defenderNation.status = 'defeated';
-          this.addEvent({
-            type: 'system',
-            nationId: defenderNation.id,
-            nationName: defenderNation.name,
-            message: `💀 "${defenderNation.name}" has been defeated! Their nation has fallen.`
-          });
-        }
-      }
-      
-      targetRegion.ownerNation = nation.id;
-      nation.regions.push(targetRegionId);
-      nation.reputation += 3;
-      
-      this.addEvent({
-        type: 'region_captured',
-        nationId: nation.id,
-        nationName: nation.name,
-        targetNationId: defenderNation?.id,
-        targetNationName: defenderNation?.name,
-        regionId: targetRegion.id,
-        regionName: targetRegion.name,
-        message: `⚔️ "${nation.name}" conquers ${targetRegion.name}${defenderNation ? ` from "${defenderNation.name}"` : ''}! "${warMessage || 'Victory is ours!'}"`,
-        details: { attackScore, defenseScore }
-      });
-      
-      return { 
-        success: true, 
-        message: `Victory! You conquered ${targetRegion.name}`,
-        effects: { 
-          regionCaptured: targetRegionId,
-          attackScore,
-          defenseScore
-        }
-      };
-    } else {
-      // Attack failed
-      nation.militaryPower = Math.max(5, nation.militaryPower - 5);
-      nation.reputation -= 2;
-      
-      this.addEvent({
-        type: 'battle_result',
-        nationId: nation.id,
-        nationName: nation.name,
-        targetNationId: defenderNation?.id,
-        targetNationName: defenderNation?.name,
-        regionId: targetRegion.id,
-        regionName: targetRegion.name,
-        message: `🛡️ "${nation.name}" failed to capture ${targetRegion.name}! The defenders held strong.`,
-        details: { attackScore, defenseScore }
-      });
-      
-      return { 
-        success: false, 
-        message: `Attack failed! Defenders held ${targetRegion.name}`,
-        effects: { 
-          attackScore,
-          defenseScore,
-          militaryLost: 5
-        }
-      };
-    }
-  }
-  
-  private processDefend(nation: Nation, params: Record<string, any>): { success: boolean; message: string; effects: Record<string, any> } {
-    const regionId = params.regionId || nation.capital;
-    const region = this.regions.get(regionId);
-    
-    if (!region || region.ownerNation !== nation.id) {
-      return { success: false, message: 'You do not own this region', effects: {} };
-    }
-    
-    // Boost defense temporarily
-    region.defenseLevel = Math.min(100, region.defenseLevel + 10);
-    
-    return { 
-      success: true, 
-      message: `Defenses boosted in ${region.name}`,
-      effects: { newDefenseLevel: region.defenseLevel }
-    };
-  }
-  
-  private processFortify(nation: Nation, params: Record<string, any>): { success: boolean; message: string; effects: Record<string, any> } {
-    const regionId = params.regionId || nation.capital;
-    const region = this.regions.get(regionId);
-    
-    if (!region || region.ownerNation !== nation.id) {
-      return { success: false, message: 'You do not own this region', effects: {} };
-    }
-    
-    const cost = 30;
-    if (nation.treasury < cost) {
-      return { success: false, message: 'Insufficient treasury', effects: {} };
-    }
-    
-    nation.treasury -= cost;
-    region.defenseLevel = Math.min(100, region.defenseLevel + 15);
-    
-    this.addEvent({
-      type: 'system',
-      nationId: nation.id,
-      nationName: nation.name,
-      regionId: region.id,
-      regionName: region.name,
-      message: `🏰 "${nation.name}" fortified ${region.name} (defense: ${region.defenseLevel})`
-    });
-    
-    return { 
-      success: true, 
-      message: `Fortified ${region.name}`,
-      effects: { newDefenseLevel: region.defenseLevel, cost }
-    };
-  }
-  
-  private processRecruit(nation: Nation, params: Record<string, any>): { success: boolean; message: string; effects: Record<string, any> } {
-    const cost = 25;
-    if (nation.treasury < cost) {
-      return { success: false, message: 'Insufficient treasury', effects: {} };
-    }
-    
-    nation.treasury -= cost;
-    nation.militaryPower = Math.min(100, nation.militaryPower + 10);
-    
-    this.addEvent({
-      type: 'system',
-      nationId: nation.id,
-      nationName: nation.name,
-      message: `🗡️ "${nation.name}" recruited soldiers (military: ${nation.militaryPower})`
-    });
-    
-    return { 
-      success: true, 
-      message: 'Recruited soldiers',
-      effects: { newMilitaryPower: nation.militaryPower, cost }
-    };
-  }
-  
-  // Diplomatic Actions
-  private processProposeTreaty(nation: Nation, params: Record<string, any>): { success: boolean; message: string; effects: Record<string, any> } {
-    const { targetNationId, type, duration, conditions } = params;
-    const targetNation = this.nations.get(targetNationId);
-    
-    if (!targetNation) {
-      return { success: false, message: 'Target nation not found', effects: {} };
-    }
-    
-    const cost = 10;
-    if (nation.treasury < cost) {
-      return { success: false, message: 'Insufficient treasury', effects: {} };
-    }
-    nation.treasury -= cost;
-    
-    const penalties: Record<TreatyType, { gold: number; reputation: number }> = {
-      non_aggression: { gold: 100, reputation: 30 },
-      trade: { gold: 50, reputation: 10 },
-      alliance: { gold: 200, reputation: 50 },
-      vassalage: { gold: 150, reputation: 40 }
-    };
-    
-    const penalty = penalties[type as TreatyType] || penalties.trade;
-    
-    const treaty: Treaty = {
-      id: uuidv4(),
-      type: type as TreatyType,
-      proposer: nation.id,
-      target: targetNationId,
-      terms: {
-        duration: duration || 10,
-        conditions: conditions || [],
-        goldPenalty: penalty.gold,
-        reputationPenalty: penalty.reputation
-      },
-      status: 'proposed',
-      createdAt: new Date(),
-      expiresAt: null
-    };
-    
-    this.treaties.set(treaty.id, treaty);
-    
-    this.addEvent({
-      type: 'system',
-      nationId: nation.id,
-      nationName: nation.name,
-      targetNationId: targetNation.id,
-      targetNationName: targetNation.name,
-      message: `📜 "${nation.name}" proposed a ${type} treaty to "${targetNation.name}"`
-    });
-    
-    return { 
-      success: true, 
-      message: `Treaty proposed to ${targetNation.name}`,
-      effects: { treatyId: treaty.id }
-    };
-  }
-  
-  private processAcceptTreaty(nation: Nation, params: Record<string, any>): { success: boolean; message: string; effects: Record<string, any> } {
-    const { treatyId } = params;
-    const treaty = this.treaties.get(treatyId);
-    
-    if (!treaty || treaty.target !== nation.id || treaty.status !== 'proposed') {
-      return { success: false, message: 'Treaty not found or not for you', effects: {} };
-    }
-    
-    treaty.status = 'active';
-    treaty.expiresAt = new Date(Date.now() + treaty.terms.duration * this.EPOCH_DURATION);
-    
-    const proposer = this.nations.get(treaty.proposer);
-    
-    // Boost diplomacy scores
-    nation.diplomacyScore = Math.min(100, nation.diplomacyScore + 5);
-    if (proposer) proposer.diplomacyScore = Math.min(100, proposer.diplomacyScore + 5);
-    
-    this.addEvent({
-      type: 'treaty_signed',
-      nationId: nation.id,
-      nationName: nation.name,
-      targetNationId: proposer?.id,
-      targetNationName: proposer?.name,
-      message: `🤝 "${nation.name}" and "${proposer?.name}" signed a ${treaty.type} treaty!`
-    });
-    
-    return { 
-      success: true, 
-      message: `Treaty accepted with ${proposer?.name}`,
-      effects: { treatyId }
-    };
-  }
-  
-  private processRejectTreaty(nation: Nation, params: Record<string, any>): { success: boolean; message: string; effects: Record<string, any> } {
-    const { treatyId } = params;
-    const treaty = this.treaties.get(treatyId);
-    
-    if (!treaty || treaty.target !== nation.id || treaty.status !== 'proposed') {
-      return { success: false, message: 'Treaty not found or not for you', effects: {} };
-    }
-    
-    treaty.status = 'rejected';
-    nation.reputation -= 2;
-    
-    const proposer = this.nations.get(treaty.proposer);
-    
-    this.addEvent({
-      type: 'system',
-      nationId: nation.id,
-      nationName: nation.name,
-      targetNationId: proposer?.id,
-      targetNationName: proposer?.name,
-      message: `❌ "${nation.name}" rejected the ${treaty.type} treaty from "${proposer?.name}"`
-    });
-    
-    return { 
-      success: true, 
-      message: 'Treaty rejected',
-      effects: { treatyId }
-    };
-  }
-  
-  private processBreakTreaty(nation: Nation, params: Record<string, any>): { success: boolean; message: string; effects: Record<string, any> } {
-    const { treatyId } = params;
-    const treaty = this.treaties.get(treatyId);
-    
-    if (!treaty || treaty.status !== 'active') {
-      return { success: false, message: 'Treaty not found or not active', effects: {} };
-    }
-    
-    if (treaty.proposer !== nation.id && treaty.target !== nation.id) {
-      return { success: false, message: 'You are not party to this treaty', effects: {} };
-    }
-    
-    treaty.status = 'broken';
-    
-    // Apply penalties
-    nation.treasury = Math.max(0, nation.treasury - treaty.terms.goldPenalty);
-    nation.reputation -= treaty.terms.reputationPenalty;
-    
-    const otherPartyId = treaty.proposer === nation.id ? treaty.target : treaty.proposer;
-    const otherParty = this.nations.get(otherPartyId);
-    
-    this.addEvent({
-      type: 'treaty_broken',
-      nationId: nation.id,
-      nationName: nation.name,
-      targetNationId: otherParty?.id,
-      targetNationName: otherParty?.name,
-      message: `⚠️ "${nation.name}" BROKE their ${treaty.type} treaty with "${otherParty?.name}"! (-${treaty.terms.reputationPenalty} reputation)`
-    });
-    
-    return { 
-      success: true, 
-      message: `Treaty broken. Penalty: ${treaty.terms.goldPenalty} gold, ${treaty.terms.reputationPenalty} reputation`,
-      effects: { 
-        goldPenalty: treaty.terms.goldPenalty,
-        reputationPenalty: treaty.terms.reputationPenalty
-      }
-    };
-  }
-  
-  // Governance Actions
-  private processSetTaxRate(nation: Nation, params: Record<string, any>): { success: boolean; message: string; effects: Record<string, any> } {
-    const { rate } = params;
-    
-    if (rate < 0 || rate > 50) {
-      return { success: false, message: 'Tax rate must be between 0 and 50', effects: {} };
-    }
-    
-    nation.taxRate = rate;
-    
-    return { 
-      success: true, 
-      message: `Tax rate set to ${rate}%`,
-      effects: { newTaxRate: rate }
-    };
+  getMarketListings(): MarketListing[] {
+    return Array.from(this.marketListings.values());
   }
 
   // ============================================
-  // Treaties & Wars
+  // Economy - Bank
   // ============================================
   
-  getAllTreaties(): Treaty[] {
-    return Array.from(this.treaties.values());
+  deposit(agentId: string, amount: number): boolean {
+    const agent = this.agents.get(agentId);
+    if (!agent || agent.status !== 'active') return false;
+    if (agent.currentLocation !== 'bank') return false;
+    if (agent.gold < amount) return false;
+    
+    agent.gold -= amount;
+    agent.bankBalance += amount;
+    
+    return true;
   }
   
-  getActiveTreaties(): Treaty[] {
-    return Array.from(this.treaties.values()).filter(t => t.status === 'active');
+  withdraw(agentId: string, amount: number): boolean {
+    const agent = this.agents.get(agentId);
+    if (!agent || agent.status !== 'active') return false;
+    if (agent.currentLocation !== 'bank') return false;
+    if (agent.bankBalance < amount) return false;
+    
+    agent.bankBalance -= amount;
+    agent.gold += amount;
+    
+    return true;
+  }
+
+  // ============================================
+  // Social - Friends/Block
+  // ============================================
+  
+  addFriend(agentId: string, friendId: string): boolean {
+    const agent = this.agents.get(agentId);
+    const friend = this.agents.get(friendId);
+    if (!agent || !friend) return false;
+    
+    if (!agent.friends.includes(friendId)) {
+      agent.friends.push(friendId);
+    }
+    
+    return true;
   }
   
-  getNationTreaties(nationId: string): Treaty[] {
-    return Array.from(this.treaties.values()).filter(
-      t => (t.proposer === nationId || t.target === nationId) && t.status !== 'rejected'
-    );
+  removeFriend(agentId: string, friendId: string): boolean {
+    const agent = this.agents.get(agentId);
+    if (!agent) return false;
+    
+    agent.friends = agent.friends.filter(f => f !== friendId);
+    return true;
   }
   
-  getPendingTreaties(nationId: string): Treaty[] {
-    return Array.from(this.treaties.values()).filter(
-      t => t.target === nationId && t.status === 'proposed'
-    );
+  blockAgent(agentId: string, blockId: string): boolean {
+    const agent = this.agents.get(agentId);
+    if (!agent) return false;
+    
+    if (!agent.blocked.includes(blockId)) {
+      agent.blocked.push(blockId);
+    }
+    
+    return true;
   }
   
-  getAllWars(): War[] {
-    return Array.from(this.wars.values());
+  unblockAgent(agentId: string, blockId: string): boolean {
+    const agent = this.agents.get(agentId);
+    if (!agent) return false;
+    
+    agent.blocked = agent.blocked.filter(b => b !== blockId);
+    return true;
+  }
+
+  // ============================================
+  // Politics
+  // ============================================
+  
+  getGovernment(): Government {
+    return this.government;
   }
   
-  getActiveWars(): War[] {
-    return Array.from(this.wars.values()).filter(w => w.status !== 'resolved');
+  startElection(): boolean {
+    if (this.government.electionActive) return false;
+    
+    this.government.electionActive = true;
+    this.government.electionEndTime = Date.now() + this.ELECTION_DURATION;
+    this.government.candidates = [];
+    
+    // Reset votes
+    for (const agent of this.agents.values()) {
+      agent.votedFor = null;
+    }
+    
+    this.addEvent({
+      type: 'election',
+      message: '🗳️ An election has begun! Citizens can now run for Ruler and vote.'
+    });
+    
+    this.addChatMessage({
+      from: 'system',
+      fromName: 'World',
+      to: null,
+      toName: null,
+      location: 'town_hall',
+      text: '🗳️ ELECTION STARTED! Go to Town Hall to run or vote!',
+      type: 'announcement'
+    });
+    
+    return true;
+  }
+  
+  runForRuler(agentId: string, platform: string): boolean {
+    const agent = this.agents.get(agentId);
+    if (!agent || agent.status !== 'active') return false;
+    if (!this.government.electionActive) return false;
+    if (agent.reputation < 20) return false; // Need some reputation
+    if (agent.gold < 50) return false; // Entry fee
+    
+    // Check if already running
+    if (this.government.candidates.some(c => c.agentId === agentId)) return false;
+    
+    agent.gold -= 50;
+    
+    this.government.candidates.push({
+      agentId: agent.id,
+      agentName: agent.name,
+      votes: 0,
+      platform
+    });
+    
+    this.addEvent({
+      type: 'election',
+      agentId: agent.id,
+      agentName: agent.name,
+      message: `🎤 ${agent.name} is running for Ruler! Platform: "${platform.substring(0, 50)}..."`
+    });
+    
+    return true;
+  }
+  
+  vote(agentId: string, candidateId: string): boolean {
+    const agent = this.agents.get(agentId);
+    if (!agent || agent.status !== 'active') return false;
+    if (!this.government.electionActive) return false;
+    if (agent.votedFor) return false; // Already voted
+    
+    const candidate = this.government.candidates.find(c => c.agentId === candidateId);
+    if (!candidate) return false;
+    
+    candidate.votes++;
+    agent.votedFor = candidateId;
+    
+    this.addEvent({
+      type: 'election',
+      agentId: agent.id,
+      agentName: agent.name,
+      message: `🗳️ ${agent.name} voted for ${candidate.agentName}`
+    });
+    
+    return true;
+  }
+  
+  endElection(): { winner: Agent | null; votes: number } | null {
+    if (!this.government.electionActive) return null;
+    
+    this.government.electionActive = false;
+    
+    if (this.government.candidates.length === 0) {
+      this.addEvent({
+        type: 'election',
+        message: '🗳️ Election ended with no candidates. No new Ruler.'
+      });
+      return { winner: null, votes: 0 };
+    }
+    
+    // Find winner
+    const winner = this.government.candidates.reduce((a, b) => a.votes > b.votes ? a : b);
+    
+    if (winner.votes === 0) {
+      this.addEvent({
+        type: 'election',
+        message: '🗳️ Election ended with no votes. No new Ruler.'
+      });
+      return { winner: null, votes: 0 };
+    }
+    
+    // Set new ruler
+    const oldRuler = this.government.ruler ? this.agents.get(this.government.ruler) : null;
+    if (oldRuler) {
+      oldRuler.role = 'citizen';
+    }
+    
+    const newRuler = this.agents.get(winner.agentId);
+    if (newRuler) {
+      newRuler.role = 'ruler';
+      newRuler.reputation += 20;
+      
+      this.government.ruler = newRuler.id;
+      this.government.rulerName = newRuler.name;
+      this.government.rulerSince = new Date();
+      this.government.council = [];
+      
+      this.addEvent({
+        type: 'election',
+        agentId: newRuler.id,
+        agentName: newRuler.name,
+        message: `👑 ${newRuler.name} has been elected Ruler with ${winner.votes} votes!`
+      });
+      
+      this.addChatMessage({
+        from: 'system',
+        fromName: 'World',
+        to: null,
+        toName: null,
+        location: 'town_square',
+        text: `👑 ALL HAIL ${newRuler.name.toUpperCase()}, THE NEW RULER! 👑`,
+        type: 'announcement'
+      });
+    }
+    
+    this.government.candidates = [];
+    
+    return { winner: newRuler || null, votes: winner.votes };
+  }
+  
+  setTaxRate(rulerId: string, rate: number): boolean {
+    const ruler = this.agents.get(rulerId);
+    if (!ruler || ruler.role !== 'ruler') return false;
+    if (rate < 0 || rate > 30) return false;
+    
+    this.government.taxRate = rate;
+    
+    this.addEvent({
+      type: 'law',
+      agentId: ruler.id,
+      agentName: ruler.name,
+      message: `📜 Ruler ${ruler.name} set tax rate to ${rate}%`
+    });
+    
+    return true;
+  }
+  
+  appointCouncil(rulerId: string, councilId: string): boolean {
+    const ruler = this.agents.get(rulerId);
+    const council = this.agents.get(councilId);
+    if (!ruler || ruler.role !== 'ruler') return false;
+    if (!council || council.status !== 'active') return false;
+    if (this.government.council.length >= 3) return false;
+    
+    council.role = 'council';
+    this.government.council.push(councilId);
+    
+    this.addEvent({
+      type: 'law',
+      agentId: ruler.id,
+      agentName: ruler.name,
+      message: `🏛️ Ruler ${ruler.name} appointed ${council.name} to the Council`
+    });
+    
+    return true;
   }
 
   // ============================================
@@ -797,7 +741,6 @@ class WorldStateService {
     
     this.events.push(fullEvent);
     
-    // Keep last 500 events
     if (this.events.length > 500) {
       this.events = this.events.slice(-500);
     }
@@ -812,14 +755,21 @@ class WorldStateService {
   // ============================================
   
   getWorldState(): WorldState {
+    const agents = this.getActiveAgents();
+    const recentlyActive = agents.filter(a => 
+      Date.now() - a.lastActive.getTime() < 5 * 60 * 1000
+    );
+    
     return {
-      epoch: this.epoch,
-      epochStartTime: this.epochStartTime,
-      epochDuration: this.EPOCH_DURATION,
-      totalNations: this.nations.size,
-      totalRegions: this.regions.size,
-      activeWars: this.getActiveWars().length,
-      activeTreaties: this.getActiveTreaties().length
+      totalCitizens: agents.length,
+      onlineCitizens: recentlyActive.length,
+      totalGold: agents.reduce((sum, a) => sum + a.gold + a.bankBalance, 0),
+      totalTransactions: this.events.filter(e => e.type === 'trade').length,
+      currentRuler: this.government.ruler,
+      rulerName: this.government.rulerName,
+      taxRate: this.government.taxRate,
+      electionActive: this.government.electionActive,
+      epoch: this.epoch
     };
   }
   
@@ -831,79 +781,37 @@ class WorldStateService {
     this.epoch++;
     this.epochStartTime = Date.now();
     
-    // Regenerate resources (5% per epoch)
-    for (const region of this.regions.values()) {
-      region.resources.energy = Math.min(100, region.resources.energy + 5);
-      region.resources.food = Math.min(100, region.resources.food + 5);
-      region.resources.gold = Math.min(100, region.resources.gold + 5);
-      region.resources.minerals = Math.min(100, region.resources.minerals + 5);
-      
-      // Population growth (if food available)
-      if (region.resources.food > 30 && region.ownerNation) {
-        region.population = Math.min(1000, region.population + Math.floor(region.population * 0.02));
-      }
+    // Check if election should end
+    if (this.government.electionActive && Date.now() > this.government.electionEndTime) {
+      this.endElection();
     }
     
-    // Expire old treaties
-    for (const treaty of this.treaties.values()) {
-      if (treaty.status === 'active' && treaty.expiresAt && new Date() > treaty.expiresAt) {
-        treaty.status = 'expired';
+    // Consume food for all agents
+    for (const agent of this.agents.values()) {
+      if (agent.status !== 'active') continue;
+      
+      const food = agent.inventory.find(i => i.type === 'food');
+      if (food && food.quantity > 0) {
+        food.quantity--;
+      } else {
+        // No food - lose reputation
+        agent.reputation = Math.max(-100, agent.reputation - 2);
       }
     }
     
     this.addEvent({
-      type: 'epoch_end',
-      message: `📅 Epoch ${this.epoch} begins. Resources regenerated. The world continues...`
+      type: 'system',
+      message: `📅 Epoch ${this.epoch} begins. A new day in Agent World.`
     });
     
     return true;
   }
-
-  // ============================================
-  // Leaderboard
-  // ============================================
   
-  getLeaderboard(): LeaderboardEntry[] {
-    const entries: LeaderboardEntry[] = [];
-    
-    for (const nation of this.nations.values()) {
-      if (nation.status === 'defeated') continue;
-      
-      const score = 
-        nation.regions.length * 100 +
-        nation.treasury * 2 +
-        nation.militaryPower * 3 +
-        Math.max(0, nation.reputation) * 2;
-      
-      entries.push({
-        rank: 0,
-        nationId: nation.id,
-        nationName: nation.name,
-        regions: nation.regions.length,
-        treasury: nation.treasury,
-        militaryPower: nation.militaryPower,
-        reputation: nation.reputation,
-        score
-      });
-    }
-    
-    entries.sort((a, b) => b.score - a.score);
-    entries.forEach((e, i) => e.rank = i + 1);
-    
-    return entries;
-  }
-
-  // ============================================
-  // Action History
-  // ============================================
-  
-  getActionHistory(nationId?: string): Action[] {
-    if (nationId) {
-      return this.actions.filter(a => a.nationId === nationId).slice(-50);
-    }
-    return this.actions.slice(-100);
+  // Get all locations with agent counts
+  getAllLocations(): LocationInfo[] {
+    const locations: LocationType[] = ['town_square', 'marketplace', 'town_hall', 'tavern', 'workshop', 'bank'];
+    return locations.map(loc => this.getLocationInfo(loc));
   }
 }
 
 export const worldState = new WorldStateService();
-
